@@ -5,7 +5,7 @@ import logging
 
 from app.core.config import settings
 from app.core.database import create_tables
-from app.api import auth, users, search, explore, dashboard, seed, keywords
+from app.api import auth, users, search, explore, dashboard, seed, keywords, logs
 from app.utils.seeder import seed_initial_data
 
 
@@ -20,16 +20,16 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up TikTok Database API...")
     create_tables()
-    
+
     # Seed initial data if needed
     try:
         seed_initial_data()
         logger.info("Initial data seeded successfully")
     except Exception as e:
         logger.warning(f"Failed to seed initial data: {e}")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down TikTok Database API...")
 
@@ -39,7 +39,7 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     description="A production-grade FastAPI backend for TikTok database management",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -59,6 +59,7 @@ app.include_router(explore.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(seed.router, prefix=settings.API_V1_STR)
 app.include_router(keywords.router, prefix=settings.API_V1_STR)
+app.include_router(logs.router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")
@@ -68,7 +69,7 @@ def read_root():
         "message": "Welcome to TikTok Database API",
         "version": "1.0.0",
         "docs": "/docs",
-        "redoc": "/redoc"
+        "redoc": "/redoc",
     }
 
 
@@ -80,10 +81,7 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=settings.DEBUG,
-        log_level="info"
+        "main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG, log_level="info"
     )
