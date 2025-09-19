@@ -1,18 +1,5 @@
-# Models module initialization
+# Models package
+from .explore_topic import ExploreTopic
+from .topic_result import TopicResult
 
-from .user import User, Role
-from .search import SearchTopic, SearchDetails, ScriptScenes, RelatedVideos
-from .explore import ExploreTopics
-from .keyword import Keyword, SearchTopicKeyword
-
-__all__ = [
-    "User",
-    "Role", 
-    "SearchTopic",
-    "SearchDetails",
-    "ScriptScenes",
-    "RelatedVideos",
-    "ExploreTopics",
-    "Keyword",
-    "SearchTopicKeyword"
-]
+__all__ = ["ExploreTopic", "TopicResult"]

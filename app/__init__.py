@@ -1,1 +1,1 @@
-# App module initialization
+# TikTok Trends Backend Application
