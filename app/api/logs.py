@@ -1,184 +1,96 @@
-from fastapi import APIRouter, HTTPException, status
-from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import Dict, Any
 from datetime import datetime
-import logging
+import re
 
-# Configure logger for this module
-logger = logging.getLogger(__name__)
+from app.database.db_setup import get_db
+from app.models.explore_topic import ExploreTopic
+from app.models.topic_result import TopicResult
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
-# In-memory storage for logs (since no database is needed)
-logs_storage: List[Dict[str, Any]] = []
+
+def parse_popularity(value: str):
+    """Parse strings like '134K' -> 134000, '1.2M' -> 1_200_000, or plain numbers."""
+    if not value:
+        return None
+    try:
+        v = str(value).strip()
+        # remove commas
+        v = v.replace(',', '')
+        m = re.match(r'^([0-9,.]+)\s*([kKmM]?)$', v)
+        if not m:
+            # try to extract digits
+            num = float(re.sub(r'[^0-9.]', '', v))
+            return num
+        num_str, suffix = m.groups()
+        num = float(num_str)
+        if suffix.lower() == 'k':
+            return num * 1000
+        if suffix.lower() == 'm':
+            return num * 1_000_000
+        return num
+    except Exception:
+        return None
+
+
+def parse_percent(value: str):
+    if not value:
+        return None
+    try:
+        return float(str(value).strip().replace('%', ''))
+    except Exception:
+        return None
 
 
 @router.post("/")
-def create_log(log_data: Dict[str, Any]) -> Dict[str, Any]:
+def import_logs(log_data: Dict[str, Any], db: Session = Depends(get_db)):
     """
-    Receive and store log data in memory
+    Import log data and save to ExploreTopic and TopicResult tables.
 
-    Args:
-        log_data: Dictionary containing log information
-
-    Returns:
-        Dictionary with confirmation and stored log data
+    Expected payload: { log: [ { title, demographics, locations, relatedTopics, searchPopularity, trendPercent, url }, ... ], info: { keyword: 'Logo' } }
     """
     try:
-        # Add timestamp and unique ID to the log entry
-        log_entry = {
-            "id": len(logs_storage) + 1,
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": log_data,
-        }
+        logs = log_data.get("log", []) or []
+        info = log_data.get("info", {}) or {}
 
-        # Store in memory
-        logs_storage.append(log_entry)
+        # Use info.keyword as the ExploreTopic.topic, fallback to 'logs'
+        keyword = info.get("keyword") or info.get("key") or "logs"
 
-        # Log to application logger as well
-        logger.info(f"Received log entry: {log_data}")
+        # Get or create ExploreTopic
+        explore = db.query(ExploreTopic).filter(ExploreTopic.topic == keyword).first()
+        if not explore:
+            explore = ExploreTopic(topic=keyword, origin_user_id=0)
+            db.add(explore)
+            db.commit()
+            db.refresh(explore)
 
-        return {
-            "message": "Log entry created successfully",
-            "log_id": log_entry["id"],
-            "timestamp": log_entry["timestamp"],
-            "data": log_entry["data"],
-        }
+        imported = 0
+        for entry in logs:
+            title = entry.get("title")
+            if not title:
+                continue
 
+            # Build TopicResult row
+            search_pop = parse_popularity(entry.get("searchPopularity"))
+            trend = parse_percent(entry.get("trendPercent"))
+            location_data = entry.get("locations") or []
+            demographic_data = entry.get("demographics") or []
+
+            tr = TopicResult(
+                explore_id=explore.id,
+                relevant_keyword=title,
+                search_popularity=search_pop,
+                search_increase=trend,
+                location_data=location_data,
+                demographic_data=demographic_data,
+            )
+            db.add(tr)
+            imported += 1
+
+        db.commit()
+        return {"imported": imported, "explore_id": explore.id, "keyword": keyword}
     except Exception as e:
-        logger.error(f"Failed to create log entry: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create log entry: {str(e)}",
-        )
-
-
-@router.get("/")
-def get_logs(limit: Optional[int] = 100, offset: Optional[int] = 0) -> Dict[str, Any]:
-    """
-    Retrieve stored log entries
-
-    Args:
-        limit: Maximum number of logs to return (default: 100)
-        offset: Number of logs to skip (default: 0)
-
-    Returns:
-        Dictionary containing logs and metadata
-    """
-    try:
-        # Apply pagination
-        start_idx = offset
-        end_idx = offset + limit
-
-        paginated_logs = logs_storage[start_idx:end_idx]
-
-        return {
-            "logs": paginated_logs,
-            "total_count": len(logs_storage),
-            "returned_count": len(paginated_logs),
-            "offset": offset,
-            "limit": limit,
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to retrieve logs: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve logs: {str(e)}",
-        )
-
-
-@router.get("/{log_id}")
-def get_log_by_id(log_id: int) -> Dict[str, Any]:
-    """
-    Retrieve a specific log entry by ID
-
-    Args:
-        log_id: The ID of the log entry to retrieve
-
-    Returns:
-        Dictionary containing the log entry
-    """
-    try:
-        # Find log by ID
-        for log_entry in logs_storage:
-            if log_entry["id"] == log_id:
-                return log_entry
-
-        # If not found
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Log entry with ID {log_id} not found",
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to retrieve log {log_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve log: {str(e)}",
-        )
-
-
-@router.delete("/")
-def clear_logs() -> Dict[str, Any]:
-    """
-    Clear all stored log entries
-
-    Returns:
-        Dictionary with confirmation message
-    """
-    try:
-        cleared_count = len(logs_storage)
-        logs_storage.clear()
-
-        logger.info(f"Cleared {cleared_count} log entries")
-
-        return {
-            "message": f"Successfully cleared {cleared_count} log entries",
-            "cleared_count": cleared_count,
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to clear logs: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to clear logs: {str(e)}",
-        )
-
-
-@router.get("/stats/summary")
-def get_logs_summary() -> Dict[str, Any]:
-    """
-    Get summary statistics about stored logs
-
-    Returns:
-        Dictionary containing log statistics
-    """
-    try:
-        if not logs_storage:
-            return {
-                "total_logs": 0,
-                "oldest_log": None,
-                "newest_log": None,
-                "message": "No logs available",
-            }
-
-        # Get oldest and newest timestamps
-        timestamps = [log["timestamp"] for log in logs_storage]
-        oldest_timestamp = min(timestamps)
-        newest_timestamp = max(timestamps)
-
-        return {
-            "total_logs": len(logs_storage),
-            "oldest_log": oldest_timestamp,
-            "newest_log": newest_timestamp,
-            "storage_type": "in_memory",
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get logs summary: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get logs summary: {str(e)}",
-        )
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to import logs: {e}")

@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database.db_setup import create_tables
+# Import logs router
+from app.api import logs as logs_router
 
 # Create FastAPI application
 app = FastAPI(
@@ -42,6 +44,10 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "database": settings.DATABASE_TYPE}
+
+
+# Include logs router
+app.include_router(logs_router.router, prefix="/api/v1")
 
 
 if __name__ == "__main__":
